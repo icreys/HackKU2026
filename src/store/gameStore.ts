@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
-import type { GameState, Debts, AssetClass } from '../types/game';
+import type { GameState, Debts, AssetClass, WorkMode, SocialMode, MedicalAction } from '../types/game';
 import { getEconomyState } from '../engine/EconomyEngine';
-import { applyExpense, repayDebt } from '../engine/DebtWaterfall';
+import { applyExpense, repayDebt, totalDebt } from '../engine/DebtWaterfall';
 import { advanceRound } from '../engine/advanceRound';
+import { calcWork, calcSocial, calcMedical } from '../engine/ActivityEngine';
 
 // ─── 初始状态工厂 ──────────────────────────────────────────────────────────────
 
@@ -18,19 +19,22 @@ function createInitialState(
     gameYearOffset:  0,
     startYear,
 
-    stamina:         360,
-    healthScore:     70,
-    happinessScore:  60,
+    stamina:           360,
+    healthScore:        70,
+    happinessScore:     60,
+    moodScore:          60,
+    careerScore:        30,
+    diseaseResistance:   0,
 
     cash:            startingCash,
     salary,
     debts: {
-      studentLoan: studentLoanBalance,
-      creditLine:  0,
-      creditCard:  0,
+      studentLoan:      studentLoanBalance,
+      primeLoanBalance: 0,
+      creditCard:       0,
     },
     assets:          [],
-    monthlyExpenses: 1_200, // 默认 Tier 2 生活水平基线
+    monthlyExpenses: 1_200,
 
     reputation:      'medium',
     reputationScore: 50,
@@ -40,6 +44,11 @@ function createInitialState(
       food:           2,
       clothing:       2,
       transportation: 2,
+    },
+
+    timeCapsule: {
+      balance:         0,
+      contributionPct: 5,  // 默认每回合薪资的 5% 自动定投
     },
 
     economy:          getEconomyState(1),
@@ -52,7 +61,6 @@ function createInitialState(
 // ─── Store 动作类型 ────────────────────────────────────────────────────────────
 
 interface GameActions {
-  /** 用存档数据初始化新游戏 */
   initGame: (
     startYear: number,
     salary: number,
@@ -60,34 +68,51 @@ interface GameActions {
     studentLoan: number,
   ) => void;
 
-  /** 推进到下一回合（自动处理利息、通胀、薪资） */
   nextRound: () => void;
 
-  /** 支付开销——自动触发 DebtWaterfall */
+  /** 支付开销：Cash → Prime Loan → Credit Card */
   payExpense: (amount: number) => void;
 
-  /** 主动还款 */
   makeDebtPayment: (amount: number) => void;
 
-  /** 更新现金（工资收入等） */
   addCash: (amount: number) => void;
 
-  /** 更新声望分（+/- delta） */
   adjustReputation: (delta: number) => void;
 
-  /** 更新健康分（+/- delta） */
   adjustHealth: (delta: number) => void;
 
-  /** 更新幸福分（+/- delta） */
   adjustHappiness: (delta: number) => void;
 
-  /** 解锁新资产类型 */
+  /**
+   * 打卡上班。
+   * slack: −2 Health | normal: −5 Health | overtime: −15 Health
+   * 体力不足时自动降级为 slack；Health 归零时标记 forcedStop。
+   */
+  performWork: (mode: WorkMode) => void;
+
+  /**
+   * 社交行动。
+   * forced: −10 Mood, +15 Career | active: +20 Mood, 0 Career
+   */
+  performSocial: (mode: SocialMode) => void;
+
+  /**
+   * 医疗行动。
+   * gym: −40 SP, −$50, +10 Health | checkup: −20 SP, −$300, +10 diseaseResistance
+   * 体力或现金不足时静默失败（返回但不修改状态）。
+   */
+  performMedical: (action: MedicalAction) => void;
+
+  /** 修改时间胶囊定投比例 (0–100) */
+  setContributionPct: (pct: number) => void;
+
+  /** 提前赎回时间胶囊（全额转回现金，无惩罚） */
+  redeemTimeCapsule: () => void;
+
   unlockAsset: (asset: AssetClass) => void;
 
-  /** 消耗体力行动 */
   consumeStamina: (cost: number) => void;
 
-  /** 重置游戏 */
   resetGame: () => void;
 }
 
@@ -116,10 +141,10 @@ export const useGameStore = create<GameState & GameActions>()(
           amount,
           state.cash,
           state.debts as Debts,
+          state.reputation,
         );
         state.cash  = cash;
         state.debts = debts;
-        // 使用信用卡紧急兜底时扣幸福值
         if (result.creditCardCharged > 0) {
           state.happinessScore = Math.max(0, state.happinessScore - 5);
         }
@@ -135,17 +160,15 @@ export const useGameStore = create<GameState & GameActions>()(
     },
 
     addCash: (amount) => {
-      set((state) => {
-        state.cash += amount;
-      });
+      set((state) => { state.cash += amount; });
     },
 
     adjustReputation: (delta) => {
       set((state) => {
         state.reputationScore = Math.max(0, Math.min(100, state.reputationScore + delta));
-        if (state.reputationScore >= 67) state.reputation = 'good';
+        if (state.reputationScore >= 67)      state.reputation = 'good';
         else if (state.reputationScore >= 34) state.reputation = 'medium';
-        else state.reputation = 'poor';
+        else                                  state.reputation = 'poor';
       });
     },
 
@@ -158,6 +181,57 @@ export const useGameStore = create<GameState & GameActions>()(
     adjustHappiness: (delta) => {
       set((state) => {
         state.happinessScore = Math.max(0, Math.min(100, state.happinessScore + delta));
+      });
+    },
+
+    performWork: (mode) => {
+      set((state) => {
+        const res = calcWork(mode, state.salary, state.healthScore, state.stamina);
+        state.cash         += res.income;
+        state.healthScore   = Math.max(0, Math.min(100, state.healthScore + res.healthDelta));
+        state.stamina       = Math.max(0, state.stamina - res.staminaCost);
+        state.actionsRemaining = Math.max(0, state.actionsRemaining - 1);
+        // 健康归零时心情和幸福感额外受损
+        if (res.forcedStop) {
+          state.moodScore      = Math.max(0, state.moodScore - 20);
+          state.happinessScore = Math.max(0, state.happinessScore - 10);
+        }
+      });
+    },
+
+    performSocial: (mode) => {
+      set((state) => {
+        const res = calcSocial(mode, state.stamina);
+        state.moodScore      = Math.max(0, Math.min(100, state.moodScore + res.moodDelta));
+        state.careerScore    = Math.max(0, Math.min(100, state.careerScore + res.careerDelta));
+        state.happinessScore = Math.max(0, Math.min(100, state.happinessScore + res.happinessDelta));
+        state.stamina        = Math.max(0, state.stamina - res.staminaCost);
+        state.actionsRemaining = Math.max(0, state.actionsRemaining - 1);
+      });
+    },
+
+    performMedical: (action) => {
+      set((state) => {
+        const res = calcMedical(action, state.stamina, state.cash);
+        if (!res.success) return;
+        state.stamina          = Math.max(0, state.stamina - res.staminaCost);
+        state.cash             -= res.cashCost;
+        state.healthScore      = Math.max(0, Math.min(100, state.healthScore + res.healthDelta));
+        state.diseaseResistance = Math.min(100, state.diseaseResistance + res.diseaseResistanceDelta);
+        state.actionsRemaining  = Math.max(0, state.actionsRemaining - 1);
+      });
+    },
+
+    setContributionPct: (pct) => {
+      set((state) => {
+        state.timeCapsule.contributionPct = Math.max(0, Math.min(100, pct));
+      });
+    },
+
+    redeemTimeCapsule: () => {
+      set((state) => {
+        state.cash                    += state.timeCapsule.balance;
+        state.timeCapsule.balance      = 0;
       });
     },
 
@@ -182,12 +256,11 @@ export const useGameStore = create<GameState & GameActions>()(
   })),
 );
 
-// ─── 派生选择器（供 UI 组件直接使用） ─────────────────────────────────────────
+// ─── 派生选择器 ────────────────────────────────────────────────────────────────
 
 export const selectNetWorth = (state: GameState): number => {
   const assetTotal = state.assets.reduce((sum, h) => sum + h.amount, 0);
-  const debtTotal  = state.debts.studentLoan + state.debts.creditLine + state.debts.creditCard;
-  return state.cash + assetTotal - debtTotal;
+  return state.cash + assetTotal + state.timeCapsule.balance - totalDebt(state.debts);
 };
 
 export const selectCalendarYear = (state: GameState): number =>

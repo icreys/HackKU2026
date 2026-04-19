@@ -1,4 +1,4 @@
-import type { GameState, ReputationLevel } from '../types/game';
+import type { GameState, ReputationLevel, TimeCapsule } from '../types/game';
 import { getEconomyState } from './EconomyEngine';
 import { accrueDebtInterest } from './DebtWaterfall';
 
@@ -65,6 +65,34 @@ function applyInflation(monthlyExpenses: number, inflationRate: number): number 
   return monthlyExpenses * (1 + stepInflation);
 }
 
+// ─── 时间胶囊自动定投 ─────────────────────────────────────────────────────────
+
+/**
+ * 每回合从现金中扣除 salary * (contributionPct / 100) 存入时间胶囊。
+ * 时间胶囊余额按固定保守收益率（4% APY）复利增长。
+ *
+ * 若现金不足，仅投入实际可用现金（不触发负债）。
+ */
+const TIME_CAPSULE_APY = 0.04;
+
+export function applyTimeCapsuleContribution(
+  cash: number,
+  salary: number,
+  capsule: TimeCapsule,
+): { cash: number; timeCapsule: TimeCapsule } {
+  const intended    = salary * (capsule.contributionPct / 100);
+  const actual      = Math.min(intended, Math.max(0, cash));
+  const stepGrowth  = Math.pow(1 + TIME_CAPSULE_APY, YEARS_PER_ROUND) - 1;
+
+  // 已有余额复利增长 + 本期新增投入
+  const newBalance  = capsule.balance * (1 + stepGrowth) + actual;
+
+  return {
+    cash:        cash - actual,
+    timeCapsule: { ...capsule, balance: newBalance },
+  };
+}
+
 // ─── 主函数 ───────────────────────────────────────────────────────────────────
 
 /**
@@ -77,8 +105,9 @@ function applyInflation(monthlyExpenses: number, inflationRate: number): number 
  * 4. 债务利息滚动
  * 5. 薪资自然增长
  * 6. 月支出通胀
- * 7. 重置体力行动配额
- * 8. 检查游戏是否结束
+ * 7. 时间胶囊自动定投（cash -= salary * contributionPct%）
+ * 8. 体力恢复 & 行动配额重置
+ * 9. 检查游戏是否结束
  */
 export function advanceRound(state: GameState): GameState {
   const nextRound = state.currentRound + 1;
@@ -88,7 +117,7 @@ export function advanceRound(state: GameState): GameState {
   }
 
   const nextYearOffset = roundToYearOffset(nextRound);
-  const nextEconomy = getEconomyState(nextRound);
+  const nextEconomy    = getEconomyState(nextRound);
 
   // ── 债务利息滚动 ───────────────────────────────────────────────────────────
   const accruedDebts = accrueDebtInterest(state.debts);
@@ -105,10 +134,15 @@ export function advanceRound(state: GameState): GameState {
     nextEconomy.inflationRate,
   );
 
+  // ── 时间胶囊自动定投 ──────────────────────────────────────────────────────
+  // 使用本回合新薪资作为定投基准
+  const { cash: cashAfterContribution, timeCapsule: nextTimeCapsule } =
+    applyTimeCapsuleContribution(state.cash, nextSalary, state.timeCapsule);
+
   // ── 声望等级同步 ──────────────────────────────────────────────────────────
   const nextReputation = scoreToReputationLevel(state.reputationScore);
 
-  // ── 体力重置（每回合固定 360 / TOTAL_ROUNDS 点可用，保持 PRD 约定） ────────
+  // ── 体力恢复 ──────────────────────────────────────────────────────────────
   const nextStamina = Math.min(state.stamina + staminaRegenPerRound(), 360);
 
   return {
@@ -119,6 +153,8 @@ export function advanceRound(state: GameState): GameState {
     debts:            accruedDebts,
     salary:           nextSalary,
     monthlyExpenses:  nextMonthlyExpenses,
+    cash:             cashAfterContribution,
+    timeCapsule:      nextTimeCapsule,
     reputation:       nextReputation,
     stamina:          nextStamina,
     actionsRemaining: actionsPerRound(),
