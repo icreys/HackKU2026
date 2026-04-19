@@ -1,4 +1,4 @@
-import { useGameStore, selectNetWorth, selectCalendarYear } from '../store/gameStore';
+import { useGameStore, selectNetWorth } from '../store/gameStore';
 import { getPhaseLabel } from '../engine/EconomyEngine';
 import AnimatedNumber from './AnimatedNumber';
 import StaminaBar from './StaminaBar';
@@ -22,10 +22,10 @@ const fmtMoney = (n: number) =>
   (n < 0 ? '-' : '') + '$' + Math.abs(Math.round(n)).toLocaleString('en-US');
 
 export default function HUD() {
-  const state          = useGameStore();
-  const netWorth       = useGameStore(selectNetWorth);
-  const calendarYear   = useGameStore(selectCalendarYear);
-  const age            = 22 + Math.floor(state.gameYearOffset);
+  const state    = useGameStore();
+  const netWorth = useGameStore(selectNetWorth);
+  // currentYear / playerAge 已在 advanceRound 用 Math.floor 写入 state，保证整数
+  const { currentYear, playerAge } = state;
   // 实际净资产 = 名义 / (1 + 累计通胀近似)
   const cumulativeInflation = Math.pow(1 + state.economy.inflationRate, state.gameYearOffset);
   const realNetWorth   = netWorth / cumulativeInflation;
@@ -48,8 +48,8 @@ export default function HUD() {
           <AnimatedNumber value={state.currentRound} /> <span className="text-sm">/ 30</span>
         </div>
         <div className="mt-1 text-xs font-sketch flex justify-between">
-          <span>年份 <AnimatedNumber value={calendarYear} format={(n) => String(n)} /></span>
-          <span>年龄 <AnimatedNumber value={age} format={(n) => String(n)} /></span>
+          <span>年份 <AnimatedNumber value={currentYear} /></span>
+          <span>年龄 <AnimatedNumber value={playerAge} /></span>
         </div>
       </section>
 

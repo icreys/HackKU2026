@@ -1,6 +1,7 @@
 import type { GameState, ReputationLevel, TimeCapsule } from '../types/game';
 import { getEconomyState } from './EconomyEngine';
 import { accrueDebtInterest } from './DebtWaterfall';
+import { triggerRandomEvent, canAdvanceRound } from './EventEngine';
 
 // ─── 时间步长常量 ──────────────────────────────────────────────────────────────
 
@@ -99,56 +100,79 @@ export function applyTimeCapsuleContribution(
  * advanceRound：推进一个回合，返回更新后的 GameState。
  *
  * 执行顺序：
+ * 0. 阻塞门卫：有未处理事件时直接返回（不推进）
  * 1. currentRound + 1
- * 2. 计算新的 gameYearOffset
+ * 2. 计算 gameYearOffset → currentYear / playerAge（整数）
  * 3. 更新经济状态
  * 4. 债务利息滚动
- * 5. 薪资自然增长
+ * 5. 薪资自然增长（失业时跳过）
  * 6. 月支出通胀
- * 7. 时间胶囊自动定投（cash -= salary * contributionPct%）
+ * 7. 时间胶囊自动定投（失业时跳过）
  * 8. 体力恢复 & 行动配额重置
- * 9. 检查游戏是否结束
+ * 9. 触发 2–4 个随机事件，推入 pendingEvents
+ * 10. 检查游戏是否结束
  */
 export function advanceRound(state: GameState): GameState {
-  const nextRound = state.currentRound + 1;
+  // ── 0. 阻塞门卫 ────────────────────────────────────────────────────────────
+  if (!canAdvanceRound(state.pendingEvents)) {
+    return state; // 有待确认事件，不推进
+  }
 
+  const nextRound = state.currentRound + 1;
   if (nextRound > TOTAL_ROUNDS) {
     return { ...state, isGameOver: true };
   }
 
+  // ── 1-2. 时间步长 & 整数年份/年龄 ──────────────────────────────────────────
   const nextYearOffset = roundToYearOffset(nextRound);
-  const nextEconomy    = getEconomyState(nextRound);
+  const nextCurrentYear = Math.floor(state.startYear + nextYearOffset);
+  const nextPlayerAge   = Math.floor(22 + nextYearOffset);
 
-  // ── 债务利息滚动 ───────────────────────────────────────────────────────────
+  const nextEconomy = getEconomyState(nextRound);
+
+  // ── 3. 债务利息滚动 ───────────────────────────────────────────────────────
   const accruedDebts = accrueDebtInterest(state.debts);
 
-  // ── 薪资成长 ──────────────────────────────────────────────────────────────
-  const nextSalary = applyCareerGrowth(
-    state.salary,
-    nextEconomy.salaryGrowthMultiplier,
-  );
+  // ── 4. 薪资成长（失业时维持原薪不增长，恢复就业后再涨） ─────────────────────
+  const nextSalary = state.isUnemployed
+    ? state.salary
+    : applyCareerGrowth(state.salary, nextEconomy.salaryGrowthMultiplier);
 
-  // ── 月支出通胀 ────────────────────────────────────────────────────────────
+  // ── 5. 月支出通胀 ─────────────────────────────────────────────────────────
   const nextMonthlyExpenses = applyInflation(
     state.monthlyExpenses,
     nextEconomy.inflationRate,
   );
 
-  // ── 时间胶囊自动定投 ──────────────────────────────────────────────────────
-  // 使用本回合新薪资作为定投基准
+  // ── 6. 时间胶囊自动定投（失业期间暂停投入） ──────────────────────────────────
   const { cash: cashAfterContribution, timeCapsule: nextTimeCapsule } =
-    applyTimeCapsuleContribution(state.cash, nextSalary, state.timeCapsule);
+    state.isUnemployed
+      ? { cash: state.cash, timeCapsule: state.timeCapsule }
+      : applyTimeCapsuleContribution(state.cash, nextSalary, state.timeCapsule);
 
-  // ── 声望等级同步 ──────────────────────────────────────────────────────────
+  // ── 7. 失业计数 ──────────────────────────────────────────────────────────
+  const nextUnemployedRounds = state.isUnemployed
+    ? state.unemployedRounds + 1
+    : 0;
+
+  // ── 8. 声望等级同步 ──────────────────────────────────────────────────────
   const nextReputation = scoreToReputationLevel(state.reputationScore);
 
-  // ── 体力恢复 ──────────────────────────────────────────────────────────────
+  // ── 9. 体力恢复 ──────────────────────────────────────────────────────────
   const nextStamina = Math.min(state.stamina + staminaRegenPerRound(), 360);
+
+  // ── 10. 触发随机事件 ──────────────────────────────────────────────────────
+  const newEvents = triggerRandomEvent({
+    economy:      nextEconomy,
+    isUnemployed: state.isUnemployed,
+  });
 
   return {
     ...state,
     currentRound:     nextRound,
     gameYearOffset:   nextYearOffset,
+    currentYear:      nextCurrentYear,
+    playerAge:        nextPlayerAge,
     economy:          nextEconomy,
     debts:            accruedDebts,
     salary:           nextSalary,
@@ -158,6 +182,8 @@ export function advanceRound(state: GameState): GameState {
     reputation:       nextReputation,
     stamina:          nextStamina,
     actionsRemaining: actionsPerRound(),
+    unemployedRounds: nextUnemployedRounds,
+    pendingEvents:    newEvents,
     isGameOver:       false,
   };
 }

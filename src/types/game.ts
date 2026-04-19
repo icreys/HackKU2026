@@ -105,6 +105,12 @@ export interface GameState {
   /** 游戏起始历史年份 (1920–2026) */
   startYear: number;
 
+  // ── Derived integers（从 gameYearOffset 用 Math.floor 计算，存入 state） ────
+  /** 当前历史年份（整数），startYear + Math.floor(gameYearOffset) */
+  currentYear: number;
+  /** 玩家年龄（整数），22 + Math.floor(gameYearOffset) */
+  playerAge: number;
+
   // ── Vitals ──────────────────────────────────────────────────────────────────
   /** 体力值，初始 360，每回合消耗行动 */
   stamina: number;
@@ -143,6 +149,16 @@ export interface GameState {
   // ── Economy ─────────────────────────────────────────────────────────────────
   economy: EconomyState;
 
+  // ── Employment ──────────────────────────────────────────────────────────────
+  /** 是否处于失业状态；失业时工作行动收入为 0，时间胶囊暂停投入 */
+  isUnemployed: boolean;
+  /** 连续失业回合数（用于触发失业事件升级） */
+  unemployedRounds: number;
+
+  // ── Event queue ─────────────────────────────────────────────────────────────
+  /** 待处理随机事件队列；非空时阻止推进下一回合 */
+  pendingEvents: GameEvent[];
+
   // ── Meta ────────────────────────────────────────────────────────────────────
   /** 本回合可用行动数 */
   actionsRemaining: number;
@@ -150,6 +166,29 @@ export interface GameState {
   unlockedAssets: AssetClass[];
   /** 是否已完成游戏 */
   isGameOver: boolean;
+}
+
+// ─── Random Events ────────────────────────────────────────────────────────────
+
+export type EventCategory = 'positive' | 'negative' | 'blackSwan' | 'windfall';
+
+export interface GameEventEffect {
+  cashDelta?:         number;
+  healthDelta?:       number;
+  moodDelta?:         number;
+  happinessDelta?:    number;
+  reputationDelta?:   number;
+  salaryMultiplier?:  number;  // e.g. 0 = 解雇, 1.2 = 加薪
+  creditCardDebt?:    number;  // 直接追加信用卡债务
+  isUnemployed?:      boolean; // true = 触发失业
+}
+
+export interface GameEvent {
+  id: string;
+  category: EventCategory;
+  title: string;
+  description: string;
+  effect: GameEventEffect;
 }
 
 // ─── Expense payment result ───────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import { getEconomyState } from '../engine/EconomyEngine';
 import { applyExpense, repayDebt, totalDebt } from '../engine/DebtWaterfall';
 import { advanceRound } from '../engine/advanceRound';
 import { calcWork, calcSocial, calcMedical } from '../engine/ActivityEngine';
+import { applyEventEffect } from '../engine/EventEngine';
 
 // ─── 初始状态工厂 ──────────────────────────────────────────────────────────────
 
@@ -19,12 +20,19 @@ function createInitialState(
     gameYearOffset:  0,
     startYear,
 
-    stamina:           360,
-    healthScore:        70,
-    happinessScore:     60,
-    moodScore:          60,
-    careerScore:        30,
-    diseaseResistance:   0,
+    currentYear:        startYear,
+    playerAge:          22,
+
+    stamina:            360,
+    healthScore:         70,
+    happinessScore:      60,
+    moodScore:           60,
+    careerScore:         30,
+    diseaseResistance:    0,
+
+    isUnemployed:       false,
+    unemployedRounds:   0,
+    pendingEvents:      [],
 
     cash:            startingCash,
     salary,
@@ -102,6 +110,15 @@ interface GameActions {
    * 体力或现金不足时静默失败（返回但不修改状态）。
    */
   performMedical: (action: MedicalAction) => void;
+
+  /**
+   * 确认并处理一个待处理事件（弹出队首，应用效果）。
+   * @param eventId 必须与 pendingEvents[0].id 匹配，防止乱序触发
+   */
+  resolveEvent: (eventId: string) => void;
+
+  /** 手动设置失业状态（供事件系统和测试使用） */
+  setUnemployed: (value: boolean) => void;
 
   /** 修改时间胶囊定投比例 (0–100) */
   setContributionPct: (pct: number) => void;
@@ -184,9 +201,44 @@ export const useGameStore = create<GameState & GameActions>()(
       });
     },
 
+    resolveEvent: (eventId) => {
+      set((state) => {
+        const idx = state.pendingEvents.findIndex(e => e.id === eventId);
+        if (idx === -1) return;
+        const event = state.pendingEvents[idx];
+        const applied = applyEventEffect(event.effect, {
+          cash:             state.cash,
+          healthScore:      state.healthScore,
+          moodScore:        state.moodScore,
+          happinessScore:   state.happinessScore,
+          reputationScore:  state.reputationScore,
+          salary:           state.salary,
+          debts:            state.debts,
+          isUnemployed:     state.isUnemployed,
+          unemployedRounds: state.unemployedRounds,
+        });
+        Object.assign(state, applied);
+        // 声望等级同步
+        if (state.reputationScore >= 67)      state.reputation = 'good';
+        else if (state.reputationScore >= 34) state.reputation = 'medium';
+        else                                  state.reputation = 'poor';
+        // 从队列中移除
+        state.pendingEvents.splice(idx, 1);
+      });
+    },
+
+    setUnemployed: (value) => {
+      set((state) => {
+        state.isUnemployed    = value;
+        state.unemployedRounds = value ? state.unemployedRounds : 0;
+      });
+    },
+
     performWork: (mode) => {
       set((state) => {
-        const res = calcWork(mode, state.salary, state.healthScore, state.stamina);
+        // 失业状态下无收入
+        const effectiveSalary = state.isUnemployed ? 0 : state.salary;
+        const res = calcWork(mode, effectiveSalary, state.healthScore, state.stamina);
         state.cash         += res.income;
         state.healthScore   = Math.max(0, Math.min(100, state.healthScore + res.healthDelta));
         state.stamina       = Math.max(0, state.stamina - res.staminaCost);
