@@ -1,0 +1,60 @@
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Patrick+Hand&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --paper:    #FDFDFD;
+  --ink:      #1A1A1A;
+  --positive: #008F5D;
+  --negative: #C62828;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Patrick Hand', 'Comic Sans MS', cursive;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 纸张纹理：淡淡的横线背景 */
+.paper-bg {
+  background-color: var(--paper);
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 31px,
+      rgba(26, 26, 26, 0.04) 31px,
+      rgba(26, 26, 26, 0.04) 32px
+    );
+}
+
+/* 手绘描边的通用类 */
+.doodle-stroke {
+  stroke: var(--ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+/* 手绘卡片：略歪的边框 + 双线 */
+.doodle-card {
+  border: 2px solid var(--ink);
+  border-radius: 14px 18px 12px 20px / 16px 12px 18px 14px;
+  background: rgba(253, 253, 253, 0.85);
+  box-shadow: 2px 3px 0 0 rgba(26, 26, 26, 0.18);
+}
+
+/* 体力条铅笔涂鸦填充 */
+.pencil-fill {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--ink) 0 2px,
+    transparent 2px 5px
+  );
+}
