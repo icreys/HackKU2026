@@ -24,10 +24,10 @@ export interface EconomyState {
 export interface Debts {
   /** 学生贷款 — 5.5% APR 季度复利 */
   studentLoan: number;
-  /** 优惠利率贷款余额 — ~6% APR，额度基于声望等级 */
-  primeLoanBalance: number;
+  /** 优惠利率贷款（低息）— ~6% APR，额度基于声望等级 */
+  primeLoanDebt: number;
   /** 信用卡债务 — 22% APR 季度复利（紧急兜底） */
-  creditCard: number;
+  creditCardDebt: number;
 }
 
 // ─── Reputation ───────────────────────────────────────────────────────────────
@@ -47,10 +47,14 @@ export type SocialMode =
   | 'forced'    // 被迫社交：扣 Mood，涨 Career
   | 'active';   // 积极社交：大涨 Mood，不加 Career
 
-/** 两种医疗行动 */
+/** 两种医疗行动（每回合各限 1 次） */
 export type MedicalAction =
-  | 'gym'       // 健身房：扣 SP + 现金，涨 Health
-  | 'checkup';  // 全面体检：扣 SP + 现金，涨 diseaseResistance
+  | 'gym'       // 健身房：-40 SP, -$50, +10 Health
+  | 'checkup';  // 全面体检：-20 SP, -$1,000, +10 diseaseResistance
+
+/** 学习/考证行动 */
+export type StudyAction =
+  | 'certification'; // 职业考证：-30 SP, -$5,000, +20 Career
 
 // ─── Lifestyle ────────────────────────────────────────────────────────────────
 
@@ -112,8 +116,10 @@ export interface GameState {
   playerAge: number;
 
   // ── Vitals ──────────────────────────────────────────────────────────────────
-  /** 体力值，初始 360，每回合消耗行动 */
+  /** 当前体力，每回合开始时完全重置为 maxStamina */
   stamina: number;
+  /** 体力上限（初始 360）；急诊事件永久 -50，不可恢复 */
+  maxStamina: number;
   /** 健康值 0–100，影响生病概率；低健康触发负面事件 */
   healthScore: number;
   /** 隐藏幸福值 0–100，影响最终结局（不对玩家显示） */
@@ -131,8 +137,10 @@ export interface GameState {
   salary: number;
   debts: Debts;
   assets: AssetHolding[];
-  /** 月度固定支出（住房+食物+衣物+交通+保险） */
+  /** 月度固定支出（住房+食物+衣物+交通+保险，仅用于显示和 PRD 兼容） */
   monthlyExpenses: number;
+  /** 年度基础生活费（随通胀自动上涨），每回合通过 DebtWaterfall 扣除 */
+  annualLivingExpense: number;
 
   // ── Reputation ──────────────────────────────────────────────────────────────
   /** 显示给玩家的声望等级 */
@@ -154,6 +162,12 @@ export interface GameState {
   isUnemployed: boolean;
   /** 连续失业回合数（用于触发失业事件升级） */
   unemployedRounds: number;
+
+  // ── Per-round usage tracking ─────────────────────────────────────────────────
+  /** 本回合医疗行动使用记录（每回合开始时重置）；防止重复刷健康 */
+  thisRoundMedical: { gym: boolean; checkup: boolean };
+  /** 上一回合自动扣除的生活费金额（用于 UI Toast 提示） */
+  lastLivingExpenseDeducted: number;
 
   // ── Event queue ─────────────────────────────────────────────────────────────
   /** 待处理随机事件队列；非空时阻止推进下一回合 */

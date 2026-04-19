@@ -174,7 +174,7 @@ export function applyEventEffect(
     happinessScore: number;
     reputationScore: number;
     salary: number;
-    debts: { creditCard: number };
+    debts: { creditCardDebt: number; primeLoanDebt: number; studentLoan: number };
     isUnemployed: boolean;
     unemployedRounds: number;
   },
@@ -192,7 +192,7 @@ export function applyEventEffect(
                         : state.salary,
     debts: {
       ...state.debts,
-      creditCard: state.debts.creditCard + (effect.creditCardDebt ?? 0),
+      creditCardDebt: state.debts.creditCardDebt + (effect.creditCardDebt ?? 0),
     },
     isUnemployed:     effect.isUnemployed ?? state.isUnemployed,
     unemployedRounds: effect.isUnemployed
